@@ -1,0 +1,18 @@
+{
+  "name": "chembys-shop",
+  "version": "1.0.0",
+  "description": "This folder contains a minimal Playwright test that navigates to `https://chembys.shop/login`.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "@playwright/test": "^1.56.0"
+  }
+}
