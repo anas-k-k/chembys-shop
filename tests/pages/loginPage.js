@@ -68,6 +68,43 @@ class LoginPage {
       if (passSel) await this.page.press(passSel, "Enter");
     }
   }
+
+  // Navigate the left sidebar and open Orders > Order List
+  async selectOrderList() {
+    // Wait for the sidebar menu to be present on the master page
+    await this.page.waitForSelector("ul.sidebar-menu", {
+      state: "visible",
+      timeout: 10000,
+    });
+
+    // Try to expand the "Orders" treeview by clicking its anchor
+    const ordersAnchor = await this.page.$(
+      'ul.sidebar-menu a:has-text("Orders")'
+    );
+    if (ordersAnchor) {
+      try {
+        await ordersAnchor.click();
+      } catch (e) {
+        // ignore click errors and continue to find the link
+      }
+    }
+
+    // Click the Order List link. Try common href and text-based selectors.
+    const orderListSelector =
+      'a[href="https://chembys.shop/inventory/order_list"], a[href="/inventory/order_list"], ul.treeview-menu a:has-text("Order List")';
+    await this.page.waitForSelector(orderListSelector, {
+      state: "visible",
+      timeout: 10000,
+    });
+    await this.page.click(orderListSelector);
+
+    // Wait for navigation or the page to load
+    try {
+      await this.page.waitForLoadState("networkidle");
+    } catch (e) {
+      // ignore load state timeout
+    }
+  }
 }
 
 module.exports = { LoginPage };
