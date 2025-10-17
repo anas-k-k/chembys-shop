@@ -53,7 +53,7 @@ class OrderListPage {
 
   // Lightweight local handler for the address popup. Mirrors the behavior of
   // LoginPage.handleAddressPopup but kept here to avoid cross-file coupling.
-  async handleAddressPopup() {
+  async handleAddressPopup(rowIndex = null) {
     const selector = "#addressShowBody";
     try {
       await this.page.waitForSelector(selector, {
@@ -69,6 +69,41 @@ class OrderListPage {
 
     const rawText = (await el.innerText()).trim();
     const hasAddressChar = /[A-Za-z0-9]/.test(rawText);
+
+    // If the raw text is too short, close the popup and skip processing for this row
+    const textLength = rawText.length;
+    if (textLength < 150) {
+      // log which row was skipped and the length
+      // eslint-disable-next-line no-console
+      console.log(
+        `Skipping row ${
+          rowIndex != null ? rowIndex : "?"
+        } - address text too short (${textLength} chars)`
+      );
+
+      // attempt to close modal using preferred close button or Escape
+      const preferredClose =
+        "#addressShowModal > div > div > div.modal-footer > button";
+      try {
+        const closeBtn = await this.page.$(preferredClose);
+        if (closeBtn) {
+          await closeBtn.click();
+          await this.page.waitForTimeout(150);
+        } else {
+          await this.page.keyboard.press("Escape");
+          await this.page.waitForTimeout(100);
+        }
+      } catch (e) {
+        try {
+          await this.page.keyboard.press("Escape");
+          await this.page.waitForTimeout(100);
+        } catch (ee) {
+          // ignored
+        }
+      }
+
+      return { foundAddress: false, pincode: null, rawText, textLength };
+    }
 
     // try to extract pincode(s) from the raw text and log the main one
     const pincodes = extractPincode(rawText);
@@ -155,7 +190,8 @@ class OrderListPage {
         // the #addressShowBody popup if present. It's safe to call and will return
         // quickly if the popup doesn't exist.
         try {
-          await this.handleAddressPopup();
+          // pass 1-based row index for clearer logs
+          await this.handleAddressPopup(i + 1);
         } catch (e) {
           // ignore errors from the delegated handler and continue with local logic
         }
