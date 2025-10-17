@@ -1,3 +1,13 @@
+const path = require("path");
+const fs = require("fs");
+let xlsx;
+try {
+  xlsx = require("xlsx");
+} catch (e) {
+  // If xlsx isn't installed, we'll fail later when attempting to read files.
+  xlsx = null;
+}
+
 // Extract pincode(s) from a raw text blob.
 // Returns an array of numeric pincodes as strings (e.g. ['689672']).
 // Matches formats like 'Pincode : 689672', 'Pincode:689672', or plain 6-digit numbers.
@@ -14,6 +24,60 @@ function extractPincode(rawText) {
       const num = m.match(/(\d{4,6})/);
       if (num) candidates.push(num[1]);
     }
+    // After processing all rows, print a summary and write it to logs
+    try {
+      const dtdcList = processed.DTDC || [];
+      console.log(`Processed on DTDC (${dtdcList.length})`);
+      console.log("--------------------------------");
+      for (let i = 0; i < dtdcList.length; i++) {
+        const item = dtdcList[i];
+        console.log(
+          `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
+        );
+      }
+
+      const delList = processed.Delhivery || [];
+      console.log(`\nProcessed on Delhivery (${delList.length})`);
+      console.log("--------------------------------");
+      for (let i = 0; i < delList.length; i++) {
+        const item = delList[i];
+        console.log(
+          `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
+        );
+      }
+
+      // write to logs directory
+      try {
+        const logsDir = path.join(process.cwd(), "logs");
+        if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+        const ts = new Date().toISOString().replace(/[:.]/g, "-");
+        const filename = path.join(logsDir, `summary-${ts}.txt`);
+        const lines = [];
+        lines.push(`Processed on DTDC (${dtdcList.length})`);
+        lines.push("--------------------------------");
+        for (let i = 0; i < dtdcList.length; i++) {
+          const item = dtdcList[i];
+          lines.push(
+            `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
+          );
+        }
+        lines.push("");
+        lines.push(`Processed on Delhivery (${delList.length})`);
+        lines.push("--------------------------------");
+        for (let i = 0; i < delList.length; i++) {
+          const item = delList[i];
+          lines.push(
+            `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
+          );
+        }
+        fs.writeFileSync(filename, lines.join("\n"));
+        console.log(`Summary written to ${filename}`);
+      } catch (e) {
+        // ignore file write errors
+      }
+    } catch (e) {
+      // ignore logging errors
+    }
   }
 
   // Fallback: find any 4-6 digit sequences (some pincodes may be 4-6 digits depending on locale)
@@ -24,6 +88,55 @@ function extractPincode(rawText) {
 
   // dedupe while keeping order
   return [...new Set(candidates)];
+}
+
+// Read first-column values from the first sheet of an Excel file and return a Set of strings
+function readPincodesFromExcel(absPath) {
+  if (!xlsx) return new Set();
+  try {
+    if (!fs.existsSync(absPath)) return new Set();
+    const wb = xlsx.readFile(absPath);
+    const sheetName = wb.SheetNames && wb.SheetNames[0];
+    if (!sheetName) return new Set();
+    const sheet = wb.Sheets[sheetName];
+    const rows = xlsx.utils.sheet_to_json(sheet, { header: 1 });
+    const set = new Set();
+    for (const r of rows) {
+      if (!r || r.length === 0) continue;
+      const v = String(r[0]).trim();
+      if (v) set.add(v);
+    }
+    return set;
+  } catch (e) {
+    return new Set();
+  }
+}
+
+// Cache for Excel lookups to avoid re-reading files repeatedly
+const _excelCache = {
+  DTDC: null, // Set or null
+  Delhivery: null,
+  lastLoaded: 0,
+  // reload interval in ms (optional) - set to 60s to allow occasional refresh
+  reloadInterval: 60 * 1000,
+};
+
+function loadExcelCaches() {
+  const now = Date.now();
+  if (
+    _excelCache.lastLoaded &&
+    now - _excelCache.lastLoaded < _excelCache.reloadInterval &&
+    _excelCache.DTDC !== null &&
+    _excelCache.Delhivery !== null
+  ) {
+    return;
+  }
+  const dataDir = path.join(process.cwd(), "data");
+  _excelCache.DTDC = readPincodesFromExcel(path.join(dataDir, "DTDC.xlsx"));
+  _excelCache.Delhivery = readPincodesFromExcel(
+    path.join(dataDir, "Delhivery.xlsx")
+  );
+  _excelCache.lastLoaded = now;
 }
 
 // runtime base URL (strip trailing slash)
@@ -200,60 +313,151 @@ class OrderListPage {
         // click to expand
         await newPage.click(dropdownWrapper);
 
-        // select the last item in the opened dropdown inside the modal
+        // select option based on pincode lookup in Excel files (DTDC.xlsx and Delhivery.xlsx)
         let selected = false;
+        // track which carrier we selected for reporting
+        let selectedCarrier = null;
         try {
-          const optionSelectors = [
-            // Select2 often appends results outside the modal with this id
-            "#select2-logistics-results li.select2-results__option",
-            // Generic Select2 container
-            "ul.select2-results__options li.select2-results__option",
-            // modal-local option containers
-            "#logisticsModal ul li",
-            "#logisticsModal li",
-            "#logisticsModal select option",
-            "#logisticsModal .select2-results__option",
-            "#logisticsModal .dropdown-menu li",
-            `${dropdownWrapper} + .select2-dropdown li`,
-          ];
+          // try to determine pincode: the caller may pass it via options object
+          // check if the function was called with a pincode in the options (e.g., syncShiprocketForOrder(orderId, { pincode }))
+          const maybePincode = (arguments[1] && arguments[1].pincode) || null;
 
-          for (const sel of optionSelectors) {
+          // use cached excel sets (load if needed)
+          loadExcelCaches();
+          const dtdcSet = _excelCache.DTDC || new Set();
+          const delhiverySet = _excelCache.Delhivery || new Set();
+
+          // Helper to try selecting an option by visible text
+          const trySelectByText = async (text) => {
+            const selCandidates = [
+              `#select2-logistics-results li.select2-results__option`,
+              `ul.select2-results__options li.select2-results__option`,
+              `#logisticsModal .select2-results__option`,
+              `#logisticsModal .dropdown-menu li`,
+              `#logisticsModal li`,
+            ];
+            for (const sel of selCandidates) {
+              try {
+                const locator = newPage.locator(sel).filter({ hasText: text });
+                const count = await locator.count();
+                if (count > 0) {
+                  await locator
+                    .first()
+                    .click({ timeout: 2000, force: true })
+                    .catch(() => {});
+                  await newPage.waitForTimeout(250);
+                  return true;
+                }
+              } catch (e) {
+                // ignore
+              }
+            }
+            // fallback: try find in DOM under #logisticsModal
             try {
-              const locator = newPage.locator(sel).filter({ hasText: /./ });
-              const count = await locator.count();
-              if (count > 0) {
-                // click the last item (force in case of Select2 overlay)
-                await locator
-                  .nth(count - 1)
-                  .click({ timeout: 2000, force: true })
-                  .catch(() => {});
-                // let UI update
-                await newPage.waitForTimeout(250);
-                selected = true;
-                break;
+              const found = await newPage.evaluate((txt) => {
+                const modal = document.querySelector("#logisticsModal");
+                if (!modal) return false;
+                const items = Array.from(
+                  modal.querySelectorAll("li, option, div")
+                );
+                const match = items.find(
+                  (i) => i.innerText && i.innerText.trim() === txt
+                );
+                if (match) {
+                  try {
+                    match.click();
+                  } catch (e) {
+                    /* ignore */
+                  }
+                  return true;
+                }
+                return false;
+              }, text);
+              if (found) return true;
+            } catch (e) {
+              // ignore
+            }
+            return false;
+          };
+
+          // if we have a pincode passed in, prefer that, otherwise fallback to checking call-site info
+          const pc = maybePincode;
+          if (pc && dtdcSet.has(pc)) {
+            selected = await trySelectByText("DTDC");
+            if (selected) selectedCarrier = "DTDC";
+          } else if (pc && delhiverySet.has(pc)) {
+            selected = await trySelectByText("Delhivery");
+            if (selected) selectedCarrier = "Delhivery";
+          } else {
+            // If caller didn't pass pincode, we can try to read from the page if present
+            // Attempt to find any pincode text in modal that matches our sets
+            try {
+              const modalText = await newPage.evaluate(() => {
+                const m = document.querySelector("#logisticsModal");
+                return m ? m.innerText : "";
+              });
+              if (modalText) {
+                const found = extractPincode(modalText);
+                if (found && found.length) {
+                  const p = found[0];
+                  if (dtdcSet.has(p)) {
+                    selected = await trySelectByText("DTDC");
+                    if (selected) selectedCarrier = "DTDC";
+                  } else if (delhiverySet.has(p)) {
+                    selected = await trySelectByText("Delhivery");
+                    if (selected) selectedCarrier = "Delhivery";
+                  }
+                }
               }
             } catch (e) {
-              // ignore selector failures
+              // ignore
             }
           }
 
+          // If not selected yet, fall back to the original behavior: click the last option available
           if (!selected) {
-            // fallback: evaluate and click the last clickable element inside modal
-            await newPage.evaluate(() => {
-              const modal = document.querySelector("#logisticsModal");
-              if (!modal) return;
-              const candidates = modal.querySelectorAll(
-                "li, option, button, div"
-              );
-              if (!candidates.length) return;
-              const last = candidates[candidates.length - 1];
+            const optionSelectors = [
+              // Select2 often appends results outside the modal with this id
+              "#select2-logistics-results li.select2-results__option",
+              // Generic Select2 container
+              "ul.select2-results__options li.select2-results__option",
+              // modal-local option containers
+              "#logisticsModal ul li",
+              "#logisticsModal li",
+              "#logisticsModal select option",
+              "#logisticsModal .select2-results__option",
+              "#logisticsModal .dropdown-menu li",
+              `${dropdownWrapper} + .select2-dropdown li`,
+            ];
+
+            for (const sel of optionSelectors) {
               try {
-                last.click();
+                const locator = newPage.locator(sel).filter({ hasText: /./ });
+                const count = await locator.count();
+                if (count > 0) {
+                  // click the last item (force in case of Select2 overlay)
+                  await locator
+                    .nth(count - 1)
+                    .click({ timeout: 2000, force: true })
+                    .catch(() => {});
+                  // let UI update
+                  await newPage.waitForTimeout(250);
+                  selected = true;
+                  // best-effort: try to read the clicked element's text to infer carrier
+                  try {
+                    const txt = await locator.nth(count - 1).innerText();
+                    if (txt && /DTDC/i.test(txt)) selectedCarrier = "DTDC";
+                    else if (txt && /Delhivery/i.test(txt))
+                      selectedCarrier = "Delhivery";
+                  } catch (ee) {
+                    // ignore
+                  }
+                  break;
+                }
               } catch (e) {
-                /* ignore */
+                // ignore selector failures
               }
-            });
-            selected = true; // assume non-fatal
+            }
           }
         } catch (e) {
           // ignore selection failures
@@ -366,9 +570,9 @@ class OrderListPage {
       // close popup by clicking #SyncClose if present
       await this.CloseSyncPopup(newPage);
 
-      return { synced: true };
+      return { synced: true, carrier: selectedCarrier };
     } catch (e) {
-      return { synced: false, reason: e.message };
+      return { synced: false, reason: e.message, carrier: null };
     } finally {
       // ensure tab is closed
       try {
@@ -413,6 +617,10 @@ class OrderListPage {
 
     // get all rows currently in the table
     const rows = await this.page.$$(`${this.tableSelector} tbody tr`);
+    const processed = {
+      DTDC: [],
+      Delhivery: [],
+    };
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
@@ -530,7 +738,18 @@ class OrderListPage {
             // run sync flow for this order; keep it quick and non-blocking per row
             // awaiting here ensures sequential per-row behavior; if you want parallel,
             // you could spawn without await but ensure resource limits.
-            await this.syncShiprocketForOrder(orderId, { waitMs: 2500 });
+            const result = await this.syncShiprocketForOrder(orderId, {
+              waitMs: 2500,
+              pincode,
+            });
+            try {
+              const carrier = result && result.carrier;
+              if (carrier === "DTDC") processed.DTDC.push({ orderId, pincode });
+              else if (carrier === "Delhivery")
+                processed.Delhivery.push({ orderId, pincode });
+            } catch (e) {
+              // ignore push errors
+            }
           }
         } catch (e) {
           // log and continue

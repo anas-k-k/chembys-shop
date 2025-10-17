@@ -9,8 +9,7 @@
   "scripts": {
     "set-baseurl": "node ./scripts/set-baseurl.js",
     "test": "playwright test",
-    "test:with-baseurl": "npm run set-baseurl && npm run test"
-    ,
+    "test:with-baseurl": "npm run set-baseurl && npm run test",
     "build:exe": "pkg run.js --targets node18-win-x64 --output chembys-run.exe"
   },
   "keywords": [],
@@ -20,9 +19,10 @@
     "@playwright/test": "^1.56.0",
     "dotenv": "^16.0.0",
     "pkg": "^5.8.1"
-  }
-
-  ,
+  },
+  "dependencies": {
+    "xlsx": "^0.18.5"
+  },
   "pkg": {
     "assets": [
       "tests/**/*",
