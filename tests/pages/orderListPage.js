@@ -8,6 +8,11 @@ try {
   xlsx = null;
 }
 
+// List of order IDs to skip during processing. Keep this as a central list
+// so it's easy to add more orders later without changing loop logic.
+// Order IDs are stored as strings for consistent comparison.
+const SKIPPED_ORDERS = new Set([""]);
+
 // Extract pincode(s) from a raw text blob.
 // Returns an array of numeric pincodes as strings (e.g. ['689672']).
 // Matches formats like 'Pincode : 689672', 'Pincode:689672', or plain 6-digit numbers.
@@ -23,60 +28,6 @@ function extractPincode(rawText) {
     for (const m of labelled) {
       const num = m.match(/(\d{4,6})/);
       if (num) candidates.push(num[1]);
-    }
-    // After processing all rows, print a summary and write it to logs
-    try {
-      const dtdcList = processed.DTDC || [];
-      console.log(`Processed on DTDC (${dtdcList.length})`);
-      console.log("--------------------------------");
-      for (let i = 0; i < dtdcList.length; i++) {
-        const item = dtdcList[i];
-        console.log(
-          `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
-        );
-      }
-
-      const delList = processed.Delhivery || [];
-      console.log(`\nProcessed on Delhivery (${delList.length})`);
-      console.log("--------------------------------");
-      for (let i = 0; i < delList.length; i++) {
-        const item = delList[i];
-        console.log(
-          `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
-        );
-      }
-
-      // write to logs directory
-      try {
-        const logsDir = path.join(process.cwd(), "logs");
-        if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
-        const ts = new Date().toISOString().replace(/[:.]/g, "-");
-        const filename = path.join(logsDir, `summary-${ts}.txt`);
-        const lines = [];
-        lines.push(`Processed on DTDC (${dtdcList.length})`);
-        lines.push("--------------------------------");
-        for (let i = 0; i < dtdcList.length; i++) {
-          const item = dtdcList[i];
-          lines.push(
-            `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
-          );
-        }
-        lines.push("");
-        lines.push(`Processed on Delhivery (${delList.length})`);
-        lines.push("--------------------------------");
-        for (let i = 0; i < delList.length; i++) {
-          const item = delList[i];
-          lines.push(
-            `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
-          );
-        }
-        fs.writeFileSync(filename, lines.join("\n"));
-        console.log(`Summary written to ${filename}`);
-      } catch (e) {
-        // ignore file write errors
-      }
-    } catch (e) {
-      // ignore logging errors
     }
   }
 
@@ -620,6 +571,7 @@ class OrderListPage {
     const processed = {
       DTDC: [],
       Delhivery: [],
+      Unknown: [],
     };
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -697,6 +649,16 @@ class OrderListPage {
             }
           }
         }
+        // If this order is explicitly skipped, close any popup (if it opened)
+        // and continue to next row.
+        if (orderId && SKIPPED_ORDERS.has(String(orderId).trim())) {
+          // eslint-disable-next-line no-console
+          console.log(
+            `Skipping order ${orderId} as it's listed in SKIPPED_ORDERS`
+          );
+          continue;
+        }
+
         // find the button within the row using the relative selector
         const btn = await row.$(this.rowButtonSelector);
         if (!btn) {
@@ -743,10 +705,27 @@ class OrderListPage {
               pincode,
             });
             try {
-              const carrier = result && result.carrier;
+              // Prefer the carrier returned by the sync flow if present
+              let carrier = result && result.carrier;
+
+              // If sync didn't return a carrier, try to infer from the pincode
+              if (!carrier) {
+                try {
+                  loadExcelCaches();
+                  const dtdcSet = _excelCache.DTDC || new Set();
+                  const delhiverySet = _excelCache.Delhivery || new Set();
+                  if (pincode && dtdcSet.has(pincode)) carrier = "DTDC";
+                  else if (pincode && delhiverySet.has(pincode))
+                    carrier = "Delhivery";
+                } catch (ee) {
+                  // ignore cache/read errors
+                }
+              }
+
               if (carrier === "DTDC") processed.DTDC.push({ orderId, pincode });
               else if (carrier === "Delhivery")
                 processed.Delhivery.push({ orderId, pincode });
+              else processed.Unknown.push({ orderId, pincode });
             } catch (e) {
               // ignore push errors
             }
@@ -759,6 +738,25 @@ class OrderListPage {
           );
         }
 
+        // Per-row logging so user sees immediate progress for each processed row
+        try {
+          const pcode = (handleResult && handleResult.pincode) || null;
+          // determine carrier if we recorded it in processed arrays
+          let carrier = null;
+          if (processed.DTDC.find((x) => x.orderId === orderId))
+            carrier = "DTDC";
+          else if (processed.Delhivery.find((x) => x.orderId === orderId))
+            carrier = "Delhivery";
+          // eslint-disable-next-line no-console
+          console.log(
+            `Row ${i + 1}: order=${orderId || "N/A"}, pincode=${
+              pcode || "N/A"
+            }, carrier=${carrier || "N/A"}`
+          );
+        } catch (e) {
+          // ignore logging errors per row
+        }
+
         // short pause before next row to stabilize DOM
         await this.page.waitForTimeout(200);
       } catch (e) {
@@ -767,6 +765,79 @@ class OrderListPage {
         // eslint-disable-next-line no-console
         console.warn(`row ${i + 1}: error handling popup - ${e.message}`);
       }
+    }
+    // After processing all rows, print a summary and write it to logs
+    try {
+      const dtdcList = processed.DTDC || [];
+      console.log(`Processed on DTDC (${dtdcList.length})`);
+      console.log("--------------------------------");
+      for (let i = 0; i < dtdcList.length; i++) {
+        const item = dtdcList[i];
+        console.log(
+          `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
+        );
+      }
+
+      const delList = processed.Delhivery || [];
+      console.log(`\nProcessed on Delhivery (${delList.length})`);
+      console.log("--------------------------------");
+      for (let i = 0; i < delList.length; i++) {
+        const item = delList[i];
+        console.log(
+          `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
+        );
+      }
+
+      const unknownList = processed.Unknown || [];
+      console.log(`\nProcessed Unknown (${unknownList.length})`);
+      console.log("--------------------------------");
+      for (let i = 0; i < unknownList.length; i++) {
+        const item = unknownList[i];
+        console.log(
+          `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
+        );
+      }
+
+      // write to logs directory
+      try {
+        const logsDir = path.join(process.cwd(), "logs");
+        if (!fs.existsSync(logsDir)) fs.mkdirSync(logsDir, { recursive: true });
+        const ts = new Date().toISOString().replace(/[:.]/g, "-");
+        const filename = path.join(logsDir, `summary-${ts}.txt`);
+        const lines = [];
+        lines.push(`Processed on DTDC (${dtdcList.length})`);
+        lines.push("--------------------------------");
+        for (let i = 0; i < dtdcList.length; i++) {
+          const item = dtdcList[i];
+          lines.push(
+            `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
+          );
+        }
+        lines.push("");
+        lines.push(`Processed on Delhivery (${delList.length})`);
+        lines.push("--------------------------------");
+        for (let i = 0; i < delList.length; i++) {
+          const item = delList[i];
+          lines.push(
+            `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
+          );
+        }
+        lines.push("");
+        lines.push(`Processed Unknown (${unknownList.length})`);
+        lines.push("--------------------------------");
+        for (let i = 0; i < unknownList.length; i++) {
+          const item = unknownList[i];
+          lines.push(
+            `${i + 1}. Order :${item.orderId}, Pincode: ${item.pincode}`
+          );
+        }
+        fs.writeFileSync(filename, lines.join("\n"));
+        console.log(`Summary written to ${filename}`);
+      } catch (e) {
+        // ignore file write errors
+      }
+    } catch (e) {
+      // ignore logging errors
     }
   }
 }
