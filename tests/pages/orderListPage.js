@@ -155,6 +155,166 @@ class OrderListPage {
     };
   }
 
+  // Open a new tab for the order sync page, click Sync with Shiprocket,
+  // interact with the modal (select courier DTDC, choose radio, wait), then close.
+  // This method is defensive and will return quickly if elements are not found.
+  async syncShiprocketForOrder(orderId, { waitMs = 2500 } = {}) {
+    if (!orderId) return { synced: false, reason: "no-order-id" };
+
+    const targetUrl = `https://chembys.shop/inventory/order/${orderId}`;
+    // open new tab
+    const context = this.page.context();
+    const newPage = await context.newPage();
+    try {
+      await newPage.goto(targetUrl, {
+        waitUntil: "domcontentloaded",
+        timeout: 15000,
+      });
+
+      // wait for the sync button and click it
+      try {
+        await newPage.waitForSelector("#sync_shiprocket", {
+          state: "visible",
+          timeout: 4000,
+        });
+        await newPage.click("#sync_shiprocket");
+      } catch (e) {
+        // couldn't find or click sync button
+        return { synced: false, reason: "no-sync-button" };
+      }
+
+      // Wait for the logistics modal to appear (the selector for the dropdown wrapper)
+      const dropdownWrapper =
+        "#logisticsModal > div > div > div.modal-body > div > div > div.col-md-9 > div > span > span.selection > span";
+      try {
+        await newPage.waitForSelector(dropdownWrapper, {
+          state: "visible",
+          timeout: 5000,
+        });
+        // click to expand
+        await newPage.click(dropdownWrapper);
+
+        // select the last item in the opened dropdown inside the modal
+        let selected = false;
+        try {
+          const optionSelectors = [
+            // Select2 often appends results outside the modal with this id
+            "#select2-logistics-results li.select2-results__option",
+            // Generic Select2 container
+            "ul.select2-results__options li.select2-results__option",
+            // modal-local option containers
+            "#logisticsModal ul li",
+            "#logisticsModal li",
+            "#logisticsModal select option",
+            "#logisticsModal .select2-results__option",
+            "#logisticsModal .dropdown-menu li",
+            `${dropdownWrapper} + .select2-dropdown li`,
+          ];
+
+          for (const sel of optionSelectors) {
+            try {
+              const locator = newPage.locator(sel).filter({ hasText: /./ });
+              const count = await locator.count();
+              if (count > 0) {
+                // click the last item (force in case of Select2 overlay)
+                await locator
+                  .nth(count - 1)
+                  .click({ timeout: 2000, force: true })
+                  .catch(() => {});
+                // let UI update
+                await newPage.waitForTimeout(250);
+                selected = true;
+                break;
+              }
+            } catch (e) {
+              // ignore selector failures
+            }
+          }
+
+          if (!selected) {
+            // fallback: evaluate and click the last clickable element inside modal
+            await newPage.evaluate(() => {
+              const modal = document.querySelector("#logisticsModal");
+              if (!modal) return;
+              const candidates = modal.querySelectorAll(
+                "li, option, button, div"
+              );
+              if (!candidates.length) return;
+              const last = candidates[candidates.length - 1];
+              try {
+                last.click();
+              } catch (e) {
+                /* ignore */
+              }
+            });
+            selected = true; // assume non-fatal
+          }
+        } catch (e) {
+          // ignore selection failures
+        }
+      } catch (e) {
+        // dropdown didn't appear or selection failed - continue to try next steps
+      }
+
+      // select radio #chk_lst_yes if present - use evaluate fallback to avoid hang
+      try {
+        const found = await newPage
+          .waitForSelector("#chk_lst_yes", {
+            state: "visible",
+            timeout: 3000,
+          })
+          .catch(() => null);
+        if (found) {
+          // set checked via DOM and dispatch events
+          await newPage.evaluate(() => {
+            const el = document.querySelector("#chk_lst_yes");
+            if (!el) return;
+            try {
+              el.checked = true;
+              el.dispatchEvent(new Event("input", { bubbles: true }));
+              el.dispatchEvent(new Event("change", { bubbles: true }));
+            } catch (ee) {
+              // ignore
+            }
+          });
+        }
+      } catch (e) {
+        // ignore if radio not found
+      }
+
+      // wait a few seconds to allow any async popup process to run
+      await newPage.waitForTimeout(waitMs);
+
+      // close popup by clicking #SyncClose if present
+      try {
+        const closeSel = "#SyncClose";
+        await newPage.waitForSelector(closeSel, {
+          state: "visible",
+          timeout: 3000,
+        });
+        await newPage.click(closeSel);
+      } catch (e) {
+        // fallback: try pressing Escape
+        try {
+          await newPage.keyboard.press("Escape");
+        } catch (ee) {
+          // ignore
+        }
+      }
+
+      return { synced: true };
+    } catch (e) {
+      return { synced: false, reason: e.message };
+    } finally {
+      // ensure tab is closed
+      try {
+        await newPage.close();
+      } catch (e) {
+        // ignore
+      }
+    }
+  }
+
   // Wait for the order list table to be visible
   async waitForTable(timeout = 10000) {
     await this.page.waitForSelector(`${this.tableSelector} tbody tr`, {
@@ -273,11 +433,29 @@ class OrderListPage {
         // This delegates to LoginPage.handleAddressPopup which will inspect and close
         // the #addressShowBody popup if present. It's safe to call and will return
         // quickly if the popup doesn't exist.
+        let handleResult = null;
         try {
           // pass 1-based row index and orderId for clearer logs
-          await this.handleAddressPopup(i + 1, orderId);
+          handleResult = await this.handleAddressPopup(i + 1, orderId);
         } catch (e) {
           // ignore errors from the delegated handler and continue with local logic
+        }
+
+        // If we extracted a pincode and have an orderId, attempt to sync via Shiprocket in a new tab.
+        try {
+          const pincode = handleResult && handleResult.pincode;
+          if (pincode && orderId) {
+            // run sync flow for this order; keep it quick and non-blocking per row
+            // awaiting here ensures sequential per-row behavior; if you want parallel,
+            // you could spawn without await but ensure resource limits.
+            await this.syncShiprocketForOrder(orderId, { waitMs: 2500 });
+          }
+        } catch (e) {
+          // log and continue
+          // eslint-disable-next-line no-console
+          console.warn(
+            `row ${i + 1}: error during syncShiprocket - ${e.message}`
+          );
         }
 
         // short pause before next row to stabilize DOM
