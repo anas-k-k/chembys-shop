@@ -2,6 +2,24 @@
 
 This folder contains a minimal Playwright test that navigates to `https://chembys.shop/login`.
 
+## Building a Windows executable
+
+You can build a standalone Windows exe from `run.js` using `pkg`.
+
+1. Install dev dependencies:
+
+```powershell
+npm install
+```
+
+2. Build the exe:
+
+```powershell
+npm run build:exe
+```
+
+This produces `chembys-run.exe` in the project root. Note: Playwright's browser binaries are large and may not be fully bundled by `pkg`. It's recommended to keep the `browsers/` directory alongside the exe or set `PLAYWRIGHT_BROWSERS_PATH` to a known location.
+
 Usage notes:
 
 - To run tests against a custom base URL, run:

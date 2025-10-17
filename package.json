@@ -10,12 +10,30 @@
     "set-baseurl": "node ./scripts/set-baseurl.js",
     "test": "playwright test",
     "test:with-baseurl": "npm run set-baseurl && npm run test"
+    ,
+    "build:exe": "pkg run.js --targets node18-win-x64 --output chembys-run.exe"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
     "@playwright/test": "^1.56.0",
-    "dotenv": "^16.0.0"
+    "dotenv": "^16.0.0",
+    "pkg": "^5.8.1"
+  }
+
+  ,
+  "pkg": {
+    "assets": [
+      "tests/**/*",
+      "playwright.config.ts",
+      "scripts/**/*",
+      "test-results/**/*",
+      "browsers/**/*",
+      "logs/**/*"
+    ],
+    "scripts": [
+      "run.js"
+    ]
   }
 }
