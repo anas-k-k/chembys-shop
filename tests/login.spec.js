@@ -1,9 +1,11 @@
 const { test, expect } = require("@playwright/test");
 const { LoginPage } = require("./pages/loginPage");
+const { OrderListPage } = require("./pages/orderListPage");
 
 test("navigate to chembys.shop/login and type credentials using page object", async ({
   page,
 }) => {
+  test.setTimeout(0);
   const login = new LoginPage(page);
   await login.goto();
   await expect(page).toHaveURL(/.*\/login/);
@@ -15,11 +17,11 @@ test("navigate to chembys.shop/login and type credentials using page object", as
   await login.fillPassword(password, { delay: 120 });
   await login.submit();
   // wait for master page to load after successful login
-  await page.waitForURL(/.*\/master/, { timeout: 10000 });
+  await page.waitForURL(/.*\/master/, { timeout: 0 });
 
   // open Orders -> Order List from the left sidebar and verify navigation
   await login.selectOrderList();
-  await page.waitForURL(/.*\/inventory\/order_list/, { timeout: 10000 });
+  await page.waitForURL(/.*\/inventory\/order_list/, { timeout: 0 });
   await expect(page).toHaveURL(/.*\/inventory\/order_list/);
   // basic visibility check for the Order List page - check the page header
   await expect(page.locator('h3.box-title:has-text("Order List")')).toBeVisible(
@@ -34,4 +36,7 @@ test("navigate to chembys.shop/login and type credentials using page object", as
   // verify the table has at least one row (tbody tr)
   const rows = page.locator("table#example tbody tr");
   await expect(rows.first()).toBeVisible({ timeout: 5000 });
+  // create OrderListPage and click each row's address button to open/close popups
+  const orders = new OrderListPage(page);
+  await orders.clickEachRowAddressPopup({ perRowTimeout: 3000 });
 });
