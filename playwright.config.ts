@@ -4,9 +4,10 @@ import { defineConfig, devices } from "@playwright/test";
  * Read environment variables from file.
  * https://github.com/motdotla/dotenv
  */
-// import dotenv from 'dotenv';
-// import path from 'path';
-// dotenv.config({ path: path.resolve(__dirname, '.env') });
+import dotenv from "dotenv";
+import path from "path";
+// Load environment variables from .env (project root)
+dotenv.config({ path: path.resolve(__dirname, ".env") });
 
 /**
  * See https://playwright.dev/docs/test-configuration.
@@ -31,7 +32,9 @@ export default defineConfig({
     actionTimeout: 0,
     navigationTimeout: 0,
     /* Base URL to use in actions like `await page.goto('/')`. */
-    // baseURL: 'http://localhost:3000',
+    // The BASE_URL is read from process.env.BASE_URL (can be set via the
+    // `scripts/set-baseurl.js` helper). Falls back to the existing default.
+    baseURL: process.env.BASE_URL || "https://chembys.shop",
 
     /* Collect trace when retrying the failed test. See https://playwright.dev/docs/trace-viewer */
     trace: "on-first-retry",

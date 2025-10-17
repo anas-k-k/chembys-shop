@@ -1,3 +1,4 @@
+require("dotenv").config();
 const { test, expect } = require("@playwright/test");
 const { LoginPage } = require("./pages/loginPage");
 const { OrderListPage } = require("./pages/orderListPage");
@@ -10,8 +11,14 @@ test("navigate to chembys.shop/login and type credentials using page object", as
   await login.goto();
   await expect(page).toHaveURL(/.*\/login/);
 
-  const username = "anas";
-  const password = "anas@123";
+  const username = process.env.LOGIN_USERNAME;
+  const password = process.env.LOGIN_PASSWORD;
+
+  if (!username || !password) {
+    throw new Error(
+      "Missing LOGIN_USERNAME and/or LOGIN_PASSWORD in environment. Add them to a .env file or set env vars."
+    );
+  }
 
   await login.fillUsername(username, { delay: 120 });
   await login.fillPassword(password, { delay: 120 });

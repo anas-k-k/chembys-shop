@@ -1,3 +1,9 @@
+// runtime base URL (strip trailing slash for consistent joining)
+const BASE_URL = (process.env.BASE_URL || "https://chembys.shop").replace(
+  /\/$/,
+  ""
+);
+
 class LoginPage {
   /**
    * @param {import('@playwright/test').Page} page
@@ -24,7 +30,7 @@ class LoginPage {
   }
 
   async goto() {
-    await this.page.goto("https://chembys.shop/login");
+    await this.page.goto(`${BASE_URL}/login`);
     await this.page.waitForLoadState("networkidle");
   }
 
@@ -90,8 +96,8 @@ class LoginPage {
     }
 
     // Click the Order List link. Try common href and text-based selectors.
-    const orderListSelector =
-      'a[href="https://chembys.shop/inventory/order_list"], a[href="/inventory/order_list"], ul.treeview-menu a:has-text("Order List")';
+    const orderListHref = `${BASE_URL}/inventory/order_list`;
+    const orderListSelector = `a[href="${orderListHref}"], a[href="/inventory/order_list"], ul.treeview-menu a:has-text("Order List")`;
     await this.page.waitForSelector(orderListSelector, {
       state: "visible",
       timeout: 10000,

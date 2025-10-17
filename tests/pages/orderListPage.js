@@ -26,6 +26,12 @@ function extractPincode(rawText) {
   return [...new Set(candidates)];
 }
 
+// runtime base URL (strip trailing slash)
+const BASE_URL = (process.env.BASE_URL || "https://chembys.shop").replace(
+  /\/$/,
+  ""
+);
+
 class OrderListPage {
   /**
    * @param {import('@playwright/test').Page} page
@@ -161,7 +167,7 @@ class OrderListPage {
   async syncShiprocketForOrder(orderId, { waitMs = 2500 } = {}) {
     if (!orderId) return { synced: false, reason: "no-order-id" };
 
-    const targetUrl = `https://chembys.shop/inventory/order/${orderId}`;
+    const targetUrl = `${BASE_URL}/inventory/order/${orderId}`;
     // open new tab
     const context = this.page.context();
     const newPage = await context.newPage();
@@ -284,6 +290,8 @@ class OrderListPage {
 
       // wait a few seconds to allow any async popup process to run
       await newPage.waitForTimeout(waitMs);
+
+      // additional processing...
 
       // close popup by clicking #SyncClose if present
       try {
