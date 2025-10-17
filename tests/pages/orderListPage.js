@@ -53,7 +53,7 @@ class OrderListPage {
 
   // Lightweight local handler for the address popup. Mirrors the behavior of
   // LoginPage.handleAddressPopup but kept here to avoid cross-file coupling.
-  async handleAddressPopup(rowIndex = null) {
+  async handleAddressPopup(rowIndex = null, orderId = null) {
     const selector = "#addressShowBody";
     try {
       await this.page.waitForSelector(selector, {
@@ -76,9 +76,9 @@ class OrderListPage {
       // log which row was skipped and the length
       // eslint-disable-next-line no-console
       console.log(
-        `Skipping row ${
-          rowIndex != null ? rowIndex : "?"
-        } - address text too short (${textLength} chars)`
+        `Skipping row ${rowIndex != null ? rowIndex : "?"} (orderId=${
+          orderId || "N/A"
+        }) - address text too short (${textLength} chars)`
       );
 
       // attempt to close modal using preferred close button or Escape
@@ -102,7 +102,13 @@ class OrderListPage {
         }
       }
 
-      return { foundAddress: false, pincode: null, rawText, textLength };
+      return {
+        foundAddress: false,
+        pincode: null,
+        rawText,
+        textLength,
+        orderId,
+      };
     }
 
     // try to extract pincode(s) from the raw text and log the main one
@@ -110,7 +116,11 @@ class OrderListPage {
     const pincode = pincodes.length ? pincodes[0] : null;
 
     // eslint-disable-next-line no-console
-    console.log("Extracted pincode from address popup:", pincode);
+    console.log(
+      `Extracted pincode from address popup: ${pincode} (orderId=${
+        orderId || "N/A"
+      })`
+    );
 
     // First attempt: click the modal footer close button (preferred selector)
     const preferredClose =
@@ -141,6 +151,7 @@ class OrderListPage {
       pincode,
       pincodes,
       rawText,
+      orderId,
     };
   }
 
@@ -163,6 +174,79 @@ class OrderListPage {
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
       try {
+        // Attempt to extract an order id from the address button cell first
+        // Selector pattern used by the UI: `#example > tbody > tr:nth-child(1) > td.sorting_1 > button.btn.btn-link.address-show-btn`
+        let orderId = null;
+        try {
+          const addrBtn = await row.$(
+            "td.sorting_1 > button.address-show-btn, td.sorting_1 > a.address-show-btn"
+          );
+          if (addrBtn) {
+            // common attributes where an id might be stored
+            const attrCandidates = [
+              "data-order-id",
+              "data-id",
+              "data-order",
+              "title",
+              "aria-label",
+            ];
+            for (const attr of attrCandidates) {
+              try {
+                const v = await addrBtn.getAttribute(attr);
+                if (v) {
+                  orderId = v.trim();
+                  break;
+                }
+              } catch (e) {
+                // ignore attribute read errors
+              }
+            }
+
+            if (!orderId) {
+              try {
+                const btnText = (await addrBtn.innerText()).trim();
+                if (btnText) orderId = btnText;
+              } catch (e) {
+                // ignore
+              }
+            }
+          }
+        } catch (e) {
+          // ignore
+        }
+
+        // If not found on the button, fallback to row attribute or common cells
+        if (!orderId) {
+          try {
+            const dataAttr = await row.getAttribute("data-order-id");
+            if (dataAttr) orderId = dataAttr.trim();
+          } catch (e) {
+            // ignore
+          }
+        }
+
+        if (!orderId) {
+          const orderCell = await row.$("td.order-id, th.order-id");
+          if (orderCell) {
+            try {
+              orderId = (await orderCell.innerText()).trim();
+            } catch (e) {
+              // ignore
+            }
+          }
+        }
+
+        if (!orderId) {
+          // fallback to first td text
+          const firstTd = await row.$("td:first-child");
+          if (firstTd) {
+            try {
+              orderId = (await firstTd.innerText()).trim();
+            } catch (e) {
+              // ignore
+            }
+          }
+        }
         // find the button within the row using the relative selector
         const btn = await row.$(this.rowButtonSelector);
         if (!btn) {
@@ -190,8 +274,8 @@ class OrderListPage {
         // the #addressShowBody popup if present. It's safe to call and will return
         // quickly if the popup doesn't exist.
         try {
-          // pass 1-based row index for clearer logs
-          await this.handleAddressPopup(i + 1);
+          // pass 1-based row index and orderId for clearer logs
+          await this.handleAddressPopup(i + 1, orderId);
         } catch (e) {
           // ignore errors from the delegated handler and continue with local logic
         }
