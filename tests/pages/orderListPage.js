@@ -291,24 +291,80 @@ class OrderListPage {
       // wait a few seconds to allow any async popup process to run
       await newPage.waitForTimeout(waitMs);
 
+      // Special handling for order 1599: perform logistic sync, fetch and save
+      try {
+        // normalize orderId for comparison
+        const orderNumeric = Number(orderId);
+        if (orderId === "1599" || orderNumeric === 1599) {
+          // 1) click on submit button with selector #logistic_sync
+          try {
+            await newPage.waitForSelector("#logistic_sync", {
+              state: "visible",
+              timeout: 3000,
+            });
+            await newPage.click("#logistic_sync");
+          } catch (e) {
+            // if logistic_sync not found, continue - non-fatal
+          }
+
+          // 2) wait for the process to complete — detect modal close or wait a bit
+          try {
+            // Wait for any modal under #logisticsModal to disappear, or timeout
+            await newPage.waitForSelector("#logisticsModal", {
+              state: "detached",
+              timeout: 8000,
+            });
+          } catch (e) {
+            // fallback: short fixed wait to allow process to complete
+            await newPage.waitForTimeout(2500);
+          }
+
+          // close popup by clicking #SyncClose if present
+          await this.CloseSyncPopup(newPage);
+
+          // 3) once the popup is closed, click on fetch button on the main page
+          try {
+            const fetchSel =
+              "body > div.wrapper > div.content-wrapper > section > div.row > div > div.row.col-mb-4 > div:nth-child(3) > div:nth-child(1) > button";
+            await newPage.waitForSelector(fetchSel, {
+              state: "visible",
+              timeout: 5000,
+            });
+            await newPage.click(fetchSel);
+            // wait for fetch to run
+            await newPage.waitForTimeout(3000);
+          } catch (e) {
+            // fallback small wait if selector not found
+            await newPage.waitForTimeout(1500);
+          }
+
+          // 4) click on save with selector #save_order
+          try {
+            await newPage.waitForSelector("#save_order", {
+              state: "visible",
+              timeout: 5000,
+            });
+            await newPage.click("#save_order");
+          } catch (e) {
+            // if save button not found, ignore
+          }
+
+          // 5) wait for save to complete — look for save button to become disabled or just wait
+          try {
+            // wait a bit for save operation to complete
+            await newPage.waitForTimeout(3000);
+          } catch (e) {
+            // noop
+          }
+        }
+      } catch (e) {
+        // don't let errors here break the main flow
+      }
+
       // additional processing...
 
       // close popup by clicking #SyncClose if present
-      try {
-        const closeSel = "#SyncClose";
-        await newPage.waitForSelector(closeSel, {
-          state: "visible",
-          timeout: 3000,
-        });
-        await newPage.click(closeSel);
-      } catch (e) {
-        // fallback: try pressing Escape
-        try {
-          await newPage.keyboard.press("Escape");
-        } catch (ee) {
-          // ignore
-        }
-      }
+      await this.CloseSyncPopup(newPage);
 
       return { synced: true };
     } catch (e) {
@@ -318,6 +374,24 @@ class OrderListPage {
       try {
         await newPage.close();
       } catch (e) {
+        // ignore
+      }
+    }
+  }
+
+  async CloseSyncPopup(newPage) {
+    try {
+      const closeSel = "#SyncClose";
+      await newPage.waitForSelector(closeSel, {
+        state: "visible",
+        timeout: 3000,
+      });
+      await newPage.click(closeSel);
+    } catch (e) {
+      // fallback: try pressing Escape
+      try {
+        await newPage.keyboard.press("Escape");
+      } catch (ee) {
         // ignore
       }
     }
