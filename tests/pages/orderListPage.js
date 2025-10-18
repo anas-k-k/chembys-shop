@@ -12,7 +12,7 @@ try {
 // non-empty, only orders whose IDs appear in this Set will be processed.
 // If empty, all orders will be processed. Order IDs are stored as strings
 // for consistent comparison.
-const ORDERS_TO_PROCESS = new Set(["1640"]);
+const ORDERS_TO_PROCESS = new Set(["1648"]);
 
 // Extract pincode(s) from a raw text blob.
 // Returns an array of numeric pincodes as strings (e.g. ['689672']).
@@ -88,6 +88,17 @@ function loadExcelCaches() {
   _excelCache.Delhivery = readPincodesFromExcel(
     path.join(dataDir, "Delhivery.xlsx")
   );
+  // Delhivery cache is a Set; use .add to insert a value (avoid .push which is for arrays)
+  try {
+    if (
+      _excelCache.Delhivery &&
+      typeof _excelCache.Delhivery.add === "function"
+    ) {
+      _excelCache.Delhivery.add("682021"); // manually add known pincode
+    }
+  } catch (e) {
+    // ignore any errors when adding to cache
+  }
   _excelCache.lastLoaded = now;
 }
 
@@ -334,35 +345,70 @@ class OrderListPage {
 
           // if we have a pincode passed in, prefer that, otherwise fallback to checking call-site info
           const pc = maybePincode;
-          if (pc && dtdcSet.has(pc)) {
-            selected = await trySelectByText("DTDC");
-            if (selected) selectedCarrier = "DTDC";
-          } else if (pc && delhiverySet.has(pc)) {
-            selected = await trySelectByText("Delhivery");
-            if (selected) selectedCarrier = "Delhivery";
+          // honor environment override if provided
+          const carrierOverride = (process.env.CARRIER_OVERRIDE || "").trim();
+
+          if (carrierOverride) {
+            // Only allow recognized values: DTDC or Delhivery (case-insensitive)
+            const norm = carrierOverride.toLowerCase();
+            if (norm === "dtdc") {
+              // if pincode is present and exists in DTDC list, select it; otherwise skip this order
+              if (pc && dtdcSet.has(pc)) {
+                selected = await trySelectByText("DTDC");
+                if (selected) selectedCarrier = "DTDC";
+              } else {
+                // indicate that this row should be skipped due to override mismatch
+                return {
+                  synced: false,
+                  reason: "carrier-override-mismatch",
+                  carrier: null,
+                };
+              }
+            } else if (norm === "delhivery") {
+              if (pc && delhiverySet.has(pc)) {
+                selected = await trySelectByText("Delhivery");
+                if (selected) selectedCarrier = "Delhivery";
+              } else {
+                return {
+                  synced: false,
+                  reason: "carrier-override-mismatch",
+                  carrier: null,
+                };
+              }
+            } else {
+              // unknown override value - ignore and fall back to normal logic below
+            }
           } else {
-            // If caller didn't pass pincode, we can try to read from the page if present
-            // Attempt to find any pincode text in modal that matches our sets
-            try {
-              const modalText = await newPage.evaluate(() => {
-                const m = document.querySelector("#logisticsModal");
-                return m ? m.innerText : "";
-              });
-              if (modalText) {
-                const found = extractPincode(modalText);
-                if (found && found.length) {
-                  const p = found[0];
-                  if (dtdcSet.has(p)) {
-                    selected = await trySelectByText("DTDC");
-                    if (selected) selectedCarrier = "DTDC";
-                  } else if (delhiverySet.has(p)) {
-                    selected = await trySelectByText("Delhivery");
-                    if (selected) selectedCarrier = "Delhivery";
+            // no override: use existing pincode-first logic, then fallback to modal inspection
+            if (pc && dtdcSet.has(pc)) {
+              selected = await trySelectByText("DTDC");
+              if (selected) selectedCarrier = "DTDC";
+            } else if (pc && delhiverySet.has(pc)) {
+              selected = await trySelectByText("Delhivery");
+              if (selected) selectedCarrier = "Delhivery";
+            } else {
+              // If caller didn't pass pincode, we can try to read from the page if present
+              try {
+                const modalText = await newPage.evaluate(() => {
+                  const m = document.querySelector("#logisticsModal");
+                  return m ? m.innerText : "";
+                });
+                if (modalText) {
+                  const found = extractPincode(modalText);
+                  if (found && found.length) {
+                    const p = found[0];
+                    if (dtdcSet.has(p)) {
+                      selected = await trySelectByText("DTDC");
+                      if (selected) selectedCarrier = "DTDC";
+                    } else if (delhiverySet.has(p)) {
+                      selected = await trySelectByText("Delhivery");
+                      if (selected) selectedCarrier = "Delhivery";
+                    }
                   }
                 }
+              } catch (e) {
+                // ignore
               }
-            } catch (e) {
-              // ignore
             }
           }
 
@@ -526,6 +572,16 @@ class OrderListPage {
                   })
                   .catch(() => null);
                 if (genEl) {
+                  // Clicking may trigger a native browser dialog (confirm/alert).
+                  // Accept it explicitly to match manual behaviour seen in the UI.
+                  newPage.once("dialog", async (dialog) => {
+                    try {
+                      await dialog.accept();
+                    } catch (ee) {
+                      // ignore accept failures
+                    }
+                  });
+                  console.log("GST Invoice Generation Triggered");
                   // clicking may trigger an async process that sets the value of #gst_invoice_nb
                   await genEl.click().catch(() => {});
 
