@@ -8,10 +8,11 @@ try {
   xlsx = null;
 }
 
-// List of order IDs to skip during processing. Keep this as a central list
-// so it's easy to add more orders later without changing loop logic.
-// Order IDs are stored as strings for consistent comparison.
-const SKIPPED_ORDERS = new Set([""]);
+// Optional list of order IDs to process during a run. If this Set is
+// non-empty, only orders whose IDs appear in this Set will be processed.
+// If empty, all orders will be processed. Order IDs are stored as strings
+// for consistent comparison.
+const ORDERS_TO_PROCESS = new Set(["1640"]);
 
 // Extract pincode(s) from a raw text blob.
 // Returns an array of numeric pincodes as strings (e.g. ['689672']).
@@ -509,8 +510,52 @@ class OrderListPage {
             await newPage.waitForTimeout(1500);
           }
 
-          // 4) click on save with selector #save_order
+          // 4) (Delhivery only) generate GST invoice if required, then click on save with selector #save_order
           try {
+            // If the selected carrier is Delhivery, click the "Generate" GST button
+            // and wait for #gst_invoice_nb to be populated. This is not required for DTDC.
+            if (selectedCarrier === "Delhivery") {
+              try {
+                // click the generate GST button if visible
+                const genSel = "#gen_gst_invoice";
+                const gstNbSel = "#gst_invoice_nb";
+                const genEl = await newPage
+                  .waitForSelector(genSel, {
+                    state: "visible",
+                    timeout: 3000,
+                  })
+                  .catch(() => null);
+                if (genEl) {
+                  // clicking may trigger an async process that sets the value of #gst_invoice_nb
+                  await genEl.click().catch(() => {});
+
+                  // wait for #gst_invoice_nb to have a non-empty value (up to 8s)
+                  const start = Date.now();
+                  const timeout = 8000;
+                  let populated = false;
+                  while (Date.now() - start < timeout) {
+                    try {
+                      const val = await newPage.evaluate((sel) => {
+                        const e = document.querySelector(sel);
+                        return e ? e.value || e.innerText || "" : "";
+                      }, gstNbSel);
+                      if (val && String(val).trim().length) {
+                        populated = true;
+                        break;
+                      }
+                    } catch (ee) {
+                      // ignore evaluation errors and retry
+                    }
+                    // short sleep
+                    await newPage.waitForTimeout(250);
+                  }
+                  // if not populated, continue anyway - non-fatal
+                }
+              } catch (e) {
+                // ignore failures in GST generation; proceed to save
+              }
+            }
+
             await newPage.waitForSelector("#save_order", {
               state: "visible",
               timeout: 5000,
@@ -673,14 +718,20 @@ class OrderListPage {
             }
           }
         }
-        // If this order is explicitly skipped, close any popup (if it opened)
-        // and continue to next row.
-        if (orderId && SKIPPED_ORDERS.has(String(orderId).trim())) {
-          // eslint-disable-next-line no-console
-          console.log(
-            `Skipping order ${orderId} as it's listed in SKIPPED_ORDERS`
-          );
-          continue;
+        // If ORDERS_TO_PROCESS is non-empty, only process rows whose
+        // orderId is listed there. Otherwise process all orders.
+        if (ORDERS_TO_PROCESS.size > 0) {
+          const shouldProcess =
+            orderId && ORDERS_TO_PROCESS.has(String(orderId).trim());
+          if (!shouldProcess) {
+            // eslint-disable-next-line no-console
+            console.log(
+              `Skipping order ${
+                orderId || "N/A"
+              } because it's not listed in ORDERS_TO_PROCESS`
+            );
+            continue;
+          }
         }
 
         // find the button within the row using the relative selector
