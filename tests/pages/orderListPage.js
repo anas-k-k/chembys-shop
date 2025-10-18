@@ -450,12 +450,20 @@ class OrderListPage {
       try {
         // normalize orderId for comparison
         const orderNumeric = Number(orderId);
-        if (orderId === "1599" || orderNumeric === 1599) {
+        if (orderId !== "" || orderNumeric !== 0) {
           // 1) click on submit button with selector #logistic_sync
           try {
             await newPage.waitForSelector("#logistic_sync", {
               state: "visible",
               timeout: 3000,
+            });
+            // accept any native confirm/alert dialog that may appear when submitting
+            newPage.once("dialog", async (dialog) => {
+              try {
+                await dialog.accept();
+              } catch (ee) {
+                // ignore dialog accept failures
+              }
             });
             await newPage.click("#logistic_sync");
           } catch (e) {
@@ -485,6 +493,14 @@ class OrderListPage {
               state: "visible",
               timeout: 5000,
             });
+            // some actions trigger a native confirmation dialog; accept it if shown
+            newPage.once("dialog", async (dialog) => {
+              try {
+                await dialog.accept();
+              } catch (ee) {
+                // ignore
+              }
+            });
             await newPage.click(fetchSel);
             // wait for fetch to run
             await newPage.waitForTimeout(3000);
@@ -498,6 +514,14 @@ class OrderListPage {
             await newPage.waitForSelector("#save_order", {
               state: "visible",
               timeout: 5000,
+            });
+            // accept confirm/alert if the save triggers one
+            newPage.once("dialog", async (dialog) => {
+              try {
+                await dialog.accept();
+              } catch (ee) {
+                // ignore
+              }
             });
             await newPage.click("#save_order");
           } catch (e) {
