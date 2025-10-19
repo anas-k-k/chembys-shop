@@ -12,7 +12,7 @@ try {
 // non-empty, only orders whose IDs appear in this Set will be processed.
 // If empty, all orders will be processed. Order IDs are stored as strings
 // for consistent comparison.
-const ORDERS_TO_PROCESS = new Set(["1648"]);
+const ORDERS_TO_PROCESS = new Set([]);
 
 // Extract pincode(s) from a raw text blob.
 // Returns an array of numeric pincodes as strings (e.g. ['689672']).
@@ -94,7 +94,7 @@ function loadExcelCaches() {
       _excelCache.Delhivery &&
       typeof _excelCache.Delhivery.add === "function"
     ) {
-      _excelCache.Delhivery.add("682021"); // manually add known pincode
+      // _excelCache.Delhivery.add("682021"); // manually add known pincode
     }
   } catch (e) {
     // ignore any errors when adding to cache
@@ -268,6 +268,9 @@ class OrderListPage {
       // Wait for the logistics modal to appear (the selector for the dropdown wrapper)
       const dropdownWrapper =
         "#logisticsModal > div > div > div.modal-body > div > div > div.col-md-9 > div > span > span.selection > span";
+      // track which carrier we selected for reporting (declare here so it's
+      // visible later outside the dropdown-selection try/catch)
+      let selectedCarrier = null;
       try {
         await newPage.waitForSelector(dropdownWrapper, {
           state: "visible",
@@ -278,8 +281,6 @@ class OrderListPage {
 
         // select option based on pincode lookup in Excel files (DTDC.xlsx and Delhivery.xlsx)
         let selected = false;
-        // track which carrier we selected for reporting
-        let selectedCarrier = null;
         try {
           // try to determine pincode: the caller may pass it via options object
           // check if the function was called with a pincode in the options (e.g., syncShiprocketForOrder(orderId, { pincode }))
