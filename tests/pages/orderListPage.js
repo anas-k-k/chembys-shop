@@ -691,15 +691,36 @@ class OrderListPage {
   // timeout gracefully per row instead of failing the whole run.
   async clickEachRowAddressPopup({ perRowTimeout = 5000 } = {}) {
     await this.waitForTable();
-
     // get all rows currently in the table
     const rows = await this.page.$$(`${this.tableSelector} tbody tr`);
+    // If PROCESS_COUNT env var is set to a positive integer, treat it as
+    // the maximum number of rows to process in this run. Otherwise process
+    // all rows as before.
+    const envCount = parseInt(process.env.PROCESS_COUNT, 10);
+    const maxToProcess =
+      Number.isInteger(envCount) && envCount > 0 ? envCount : null;
+    if (maxToProcess) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `PROCESS_COUNT set: will process at most ${maxToProcess} rows`
+      );
+    }
+    // counter for how many rows we've actually processed (click + handle)
+    let processedRowCount = 0;
     const processed = {
       DTDC: [],
       Delhivery: [],
       Unknown: [],
     };
     for (let i = 0; i < rows.length; i++) {
+      // stop early if we've reached the PROCESS_COUNT limit
+      if (maxToProcess && processedRowCount >= maxToProcess) {
+        // eslint-disable-next-line no-console
+        console.log(
+          `Reached PROCESS_COUNT limit (${maxToProcess}), stopping further processing.`
+        );
+        break;
+      }
       const row = rows[i];
       try {
         // Attempt to extract an order id from the address button cell first
@@ -890,6 +911,17 @@ class OrderListPage {
         }
 
         // short pause before next row to stabilize DOM
+        // increment processed counter only for rows that actually reached
+        // this point (i.e. were clicked and handled)
+        try {
+          processedRowCount += 1;
+        } catch (e) {
+          // ignore
+        }
+
+        // if we've reached the configured maximum, break out early
+        if (maxToProcess && processedRowCount >= maxToProcess) break;
+
         await this.page.waitForTimeout(200);
       } catch (e) {
         // continue to next row; do not fail the whole loop
